@@ -876,8 +876,14 @@ private:
                     cout << "Invalid\n";
                     return;
                 }
+                string oldISBN = book->ISBN;
                 book->ISBN = mod.second;
-                it->second = mod.second; // Update selected book
+                // Update selected book for all users who had this book selected
+                for (auto& entry : selectedBooks) {
+                    if (entry.second == oldISBN) {
+                        entry.second = mod.second;
+                    }
+                }
             } else if (mod.first == "name") {
                 if (!isValidBookName(mod.second)) {
                     cout << "Invalid\n";
