@@ -1,0 +1,2 @@
+su root sjtu
+register user1 pass1 "User One"

@@ -1,0 +1,2 @@
+register user1 password1 "Test User"
+quit

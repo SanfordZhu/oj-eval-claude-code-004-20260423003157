@@ -86,9 +86,15 @@ private:
     }
 
     bool isValidUsername(const string& name) {
-        if (name.empty() || name.length() > 30) return false;
-        for (char c : name) {
-            if (c < 32 || c > 126) return false; // ASCII visible characters only
+        // Username may come with quotes, check the actual content
+        string checkName = name;
+        if (checkName.size() >= 2 && checkName.front() == '"' && checkName.back() == '"') {
+            checkName = checkName.substr(1, checkName.size() - 2);
+        }
+
+        if (checkName.empty() || checkName.length() > 30) return false;
+        for (char c : checkName) {
+            if (c < 32 || c > 126) return false; // ASCII visible characters only (32-126)
         }
         return true;
     }
@@ -131,6 +137,45 @@ private:
         return loginStack.empty() ? "" : loginStack.back();
     }
 
+    string encodeString(const string& s) {
+        string result;
+        for (char c : s) {
+            if (c == '\\') {
+                result += "\\\\";
+            } else if (c == ' ') {
+                result += "\\s";
+            } else if (c == '\n') {
+                result += "\\n";
+            } else {
+                result += c;
+            }
+        }
+        return result;
+    }
+
+    string decodeString(const string& s) {
+        string result;
+        for (size_t i = 0; i < s.length(); i++) {
+            if (s[i] == '\\' && i + 1 < s.length()) {
+                if (s[i+1] == '\\') {
+                    result += '\\';
+                    i++;
+                } else if (s[i+1] == 's') {
+                    result += ' ';
+                    i++;
+                } else if (s[i+1] == 'n') {
+                    result += '\n';
+                    i++;
+                } else {
+                    result += s[i];
+                }
+            } else {
+                result += s[i];
+            }
+        }
+        return result;
+    }
+
     void loadData() {
         // Load users
         ifstream userFile(USERS_FILE);
@@ -139,8 +184,14 @@ private:
             string line;
             while (getline(userFile, line)) {
                 istringstream iss(line);
-                User user;
-                if (iss >> user.userID >> user.password >> user.username >> user.privilege) {
+                string userID, password, username;
+                int privilege;
+                if (iss >> userID >> password >> username >> privilege) {
+                    User user;
+                    user.userID = decodeString(userID);
+                    user.password = decodeString(password);
+                    user.username = decodeString(username);
+                    user.privilege = privilege;
                     users.push_back(user);
                 }
             }
@@ -153,8 +204,17 @@ private:
             string line;
             while (getline(bookFile, line)) {
                 istringstream iss(line);
-                Book book;
-                if (iss >> book.ISBN >> book.name >> book.author >> book.keyword >> book.price >> book.quantity) {
+                string ISBN, name, author, keyword;
+                double price;
+                int quantity;
+                if (iss >> ISBN >> name >> author >> keyword >> price >> quantity) {
+                    Book book;
+                    book.ISBN = decodeString(ISBN);
+                    book.name = decodeString(name);
+                    book.author = decodeString(author);
+                    book.keyword = decodeString(keyword);
+                    book.price = price;
+                    book.quantity = quantity;
                     books.push_back(book);
                 }
             }
@@ -165,16 +225,21 @@ private:
         // Save users
         ofstream userFile(USERS_FILE);
         for (const auto& user : users) {
-            userFile << user.userID << " " << user.password << " "
-                    << user.username << " " << user.privilege << "\n";
+            userFile << encodeString(user.userID) << " "
+                     << encodeString(user.password) << " "
+                     << encodeString(user.username) << " "
+                     << user.privilege << "\n";
         }
 
         // Save books
         ofstream bookFile(BOOKS_FILE);
         for (const auto& book : books) {
-            bookFile << book.ISBN << " " << book.name << " " << book.author << " "
-                    << book.keyword << " " << fixed << setprecision(2) << book.price
-                    << " " << book.quantity << "\n";
+            bookFile << encodeString(book.ISBN) << " "
+                     << encodeString(book.name) << " "
+                     << encodeString(book.author) << " "
+                     << encodeString(book.keyword) << " "
+                     << fixed << setprecision(2) << book.price << " "
+                     << book.quantity << "\n";
         }
     }
 
@@ -192,108 +257,200 @@ public:
         saveData();
     }
 
-    void processCommand(const string& cmd) {
+    vector<string> tokenize(const string& cmd) {
+        vector<string> tokens;
         istringstream iss(cmd);
-        string command;
-        iss >> command;
+        string token;
+        bool inQuotes = false;
+        string currentToken;
 
-        if (command.empty()) {
-            // Empty command, do nothing
+        for (size_t i = 0; i < cmd.length(); i++) {
+            char c = cmd[i];
+            if (c == '"') {
+                inQuotes = !inQuotes;
+                currentToken += c;
+            } else if (c == ' ' && !inQuotes) {
+                if (!currentToken.empty()) {
+                    tokens.push_back(currentToken);
+                    currentToken.clear();
+                }
+            } else {
+                currentToken += c;
+            }
+        }
+
+        if (!currentToken.empty()) {
+            tokens.push_back(currentToken);
+        }
+
+        return tokens;
+    }
+
+    void processCommand(const string& cmd) {
+        // Skip empty lines or lines with only spaces
+        if (cmd.find_first_not_of(' ') == string::npos) {
             return;
         }
+
+        vector<string> tokens = tokenize(cmd);
+        if (tokens.empty()) return;
+
+        string command = tokens[0];
 
         if (command == "quit" || command == "exit") {
             exit(0);
         }
         else if (command == "su") {
-            string userID, password;
-            iss >> userID;
-            if (iss >> password) {
-                su(userID, password);
+            if (tokens.size() == 2) {
+                su(tokens[1], "");
+            } else if (tokens.size() == 3) {
+                su(tokens[1], tokens[2]);
             } else {
-                su(userID, "");
+                cout << "Invalid\n";
             }
         }
         else if (command == "logout") {
             logout();
         }
         else if (command == "register") {
-            string userID, password, username;
-            iss >> userID >> password >> username;
-            registerUser(userID, password, username);
+            if (tokens.size() == 4) {
+                // Remove quotes from username if present
+                string username = tokens[3];
+                if (username.size() >= 2 && username.front() == '"' && username.back() == '"') {
+                    username = username.substr(1, username.size() - 2);
+                }
+                registerUser(tokens[1], tokens[2], username);
+            } else {
+                cout << "Invalid\n";
+            }
         }
         else if (command == "passwd") {
-            string userID, currentPassword, newPassword;
-            iss >> userID;
-            if (iss >> currentPassword) {
-                if (iss >> newPassword) {
-                    passwd(userID, currentPassword, newPassword);
-                } else {
-                    // Only two arguments, so currentPassword is actually newPassword
-                    newPassword = currentPassword;
-                    passwd(userID, "", newPassword);
-                }
+            if (tokens.size() == 3) {
+                // userID newPassword (root privilege)
+                passwd(tokens[1], "", tokens[2]);
+            } else if (tokens.size() == 4) {
+                // userID currentPassword newPassword
+                passwd(tokens[1], tokens[2], tokens[3]);
+            } else {
+                cout << "Invalid\n";
             }
         }
         else if (command == "useradd") {
-            string userID, password, privilegeStr, username;
-            iss >> userID >> password >> privilegeStr >> username;
-            int privilege = stoi(privilegeStr);
-            useradd(userID, password, privilege, username);
+            if (tokens.size() == 5) {
+                string username = tokens[4];
+                if (username.size() >= 2 && username.front() == '"' && username.back() == '"') {
+                    username = username.substr(1, username.size() - 2);
+                }
+                try {
+                    int privilege = stoi(tokens[3]);
+                    useradd(tokens[1], tokens[2], privilege, username);
+                } catch (...) {
+                    cout << "Invalid\n";
+                }
+            } else {
+                cout << "Invalid\n";
+            }
         }
         else if (command == "delete") {
-            string userID;
-            iss >> userID;
-            deleteUser(userID);
+            if (tokens.size() == 2) {
+                deleteUser(tokens[1]);
+            } else {
+                cout << "Invalid\n";
+            }
         }
         else if (command == "show") {
-            string option;
-            iss >> option;
-            if (option.empty()) {
+            if (tokens.size() == 1) {
+                // show (no arguments) - show all books
                 showBooks("", "");
-            } else if (option.find("-ISBN=") == 0) {
-                string ISBN = option.substr(6);
-                showBooks("ISBN", ISBN);
-            } else if (option.find("-name=") == 0) {
-                string name = option.substr(7, option.length() - 8); // Remove quotes
-                showBooks("name", name);
-            } else if (option.find("-author=") == 0) {
-                string author = option.substr(9, option.length() - 10);
-                showBooks("author", author);
-            } else if (option.find("-keyword=") == 0) {
-                string keyword = option.substr(10, option.length() - 11);
-                showBooks("keyword", keyword);
+            } else if (tokens.size() == 2) {
+                if (tokens[1] == "finance") {
+                    showFinance(-1); // show all finance
+                } else {
+                    // show with filter
+                    string option = tokens[1];
+                    if (option.find("-ISBN=") == 0) {
+                        string ISBN = option.substr(6);
+                        showBooks("ISBN", ISBN);
+                    } else if (option.find("-name=") == 0) {
+                        string name = option.substr(6);
+                        if (name.size() >= 2 && name.front() == '"' && name.back() == '"') {
+                            name = name.substr(1, name.size() - 2);
+                        }
+                        showBooks("name", name);
+                    } else if (option.find("-author=") == 0) {
+                        string author = option.substr(8);
+                        if (author.size() >= 2 && author.front() == '"' && author.back() == '"') {
+                            author = author.substr(1, author.size() - 2);
+                        }
+                        showBooks("author", author);
+                    } else if (option.find("-keyword=") == 0) {
+                        string keyword = option.substr(9);
+                        if (keyword.size() >= 2 && keyword.front() == '"' && keyword.back() == '"') {
+                            keyword = keyword.substr(1, keyword.size() - 2);
+                        }
+                        showBooks("keyword", keyword);
+                    } else {
+                        cout << "Invalid\n";
+                    }
+                }
+            } else if (tokens.size() == 3 && tokens[1] == "finance") {
+                try {
+                    int count = stoi(tokens[2]);
+                    showFinance(count);
+                } catch (...) {
+                    cout << "Invalid\n";
+                }
             } else {
                 cout << "Invalid\n";
             }
         }
         else if (command == "buy") {
-            string ISBN;
-            string quantityStr;
-            iss >> ISBN >> quantityStr;
-            int quantity = stoi(quantityStr);
-            buyBook(ISBN, quantity);
+            if (tokens.size() == 3) {
+                try {
+                    int quantity = stoi(tokens[2]);
+                    buyBook(tokens[1], quantity);
+                } catch (...) {
+                    cout << "Invalid\n";
+                }
+            } else {
+                cout << "Invalid\n";
+            }
         }
         else if (command == "select") {
-            string ISBN;
-            iss >> ISBN;
-            selectBook(ISBN);
+            if (tokens.size() == 2) {
+                selectBook(tokens[1]);
+            } else {
+                cout << "Invalid\n";
+            }
         }
         else if (command == "modify") {
+            if (tokens.size() < 2) {
+                cout << "Invalid\n";
+                return;
+            }
             vector<pair<string, string>> modifications;
-            string option;
-            while (iss >> option) {
+            for (size_t i = 1; i < tokens.size(); i++) {
+                string option = tokens[i];
                 if (option.find("-ISBN=") == 0) {
                     string ISBN = option.substr(6);
                     modifications.push_back({"ISBN", ISBN});
                 } else if (option.find("-name=") == 0) {
-                    string name = option.substr(7, option.length() - 8);
+                    string name = option.substr(6);
+                    if (name.size() >= 2 && name.front() == '"' && name.back() == '"') {
+                        name = name.substr(1, name.size() - 2);
+                    }
                     modifications.push_back({"name", name});
                 } else if (option.find("-author=") == 0) {
-                    string author = option.substr(9, option.length() - 10);
+                    string author = option.substr(8);
+                    if (author.size() >= 2 && author.front() == '"' && author.back() == '"') {
+                        author = author.substr(1, author.size() - 2);
+                    }
                     modifications.push_back({"author", author});
                 } else if (option.find("-keyword=") == 0) {
-                    string keyword = option.substr(10, option.length() - 11);
+                    string keyword = option.substr(9);
+                    if (keyword.size() >= 2 && keyword.front() == '"' && keyword.back() == '"') {
+                        keyword = keyword.substr(1, keyword.size() - 2);
+                    }
                     modifications.push_back({"keyword", keyword});
                 } else if (option.find("-price=") == 0) {
                     string priceStr = option.substr(7);
@@ -303,22 +460,13 @@ public:
             modifyBook(modifications);
         }
         else if (command == "import") {
-            string quantityStr, totalCostStr;
-            iss >> quantityStr >> totalCostStr;
-            int quantity = stoi(quantityStr);
-            double totalCost = stod(totalCostStr);
-            importBooks(quantity, totalCost);
-        }
-        else if (command == "show") {
-            string subcmd;
-            iss >> subcmd;
-            if (subcmd == "finance") {
-                string countStr;
-                if (iss >> countStr) {
-                    int count = stoi(countStr);
-                    showFinance(count);
-                } else {
-                    showFinance(-1); // -1 means all
+            if (tokens.size() == 3) {
+                try {
+                    int quantity = stoi(tokens[1]);
+                    double totalCost = stod(tokens[2]);
+                    importBooks(quantity, totalCost);
+                } catch (...) {
+                    cout << "Invalid\n";
                 }
             } else {
                 cout << "Invalid\n";
@@ -328,12 +476,14 @@ public:
             showLog();
         }
         else if (command == "report") {
-            string reportType;
-            iss >> reportType;
-            if (reportType == "finance") {
-                reportFinance();
-            } else if (reportType == "employee") {
-                reportEmployee();
+            if (tokens.size() == 2) {
+                if (tokens[1] == "finance") {
+                    reportFinance();
+                } else if (tokens[1] == "employee") {
+                    reportEmployee();
+                } else {
+                    cout << "Invalid\n";
+                }
             } else {
                 cout << "Invalid\n";
             }
@@ -365,7 +515,11 @@ private:
                 return;
             }
         } else {
-            if (!isValidPassword(password) || user->password != password) {
+            if (!isValidPassword(password)) {
+                cout << "Invalid\n";
+                return;
+            }
+            if (user->password != password) {
                 cout << "Invalid\n";
                 return;
             }
@@ -388,10 +542,7 @@ private:
     }
 
     void registerUser(const string& userID, const string& password, const string& username) {
-        if (getCurrentPrivilege() < 0) { // Guest can register
-            cout << "Invalid\n";
-            return;
-        }
+        // register command has privilege {0}, so anyone can register
 
         if (!isValidUserID(userID) || !isValidPassword(password) || !isValidUsername(username)) {
             cout << "Invalid\n";
