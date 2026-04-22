@@ -1,0 +1,10 @@
+su root sjtu
+register user1 pass1 "User One"
+logout
+su user1 pass1
+select ISBN001
+modify -name="Test Book" -author="Test Author" -price=29.99
+show
+buy ISBN001 1
+logout
+quit
